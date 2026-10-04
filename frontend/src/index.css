@@ -1,0 +1,168 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+
+  --color-canvas: #f5f7fb;
+
+  --color-brand-50: #eff5ff;
+  --color-brand-100: #dce8ff;
+  --color-brand-200: #bcd3ff;
+  --color-brand-300: #8fb4ff;
+  --color-brand-400: #5c8cff;
+  --color-brand-500: #3366ff;
+  --color-brand-600: #2251f0;
+  --color-brand-700: #1b40c4;
+  --color-brand-800: #1c389b;
+  --color-brand-900: #1d347a;
+
+  --color-bus-50: #fff8e6;
+  --color-bus-100: #ffedb8;
+  --color-bus-200: #ffe08a;
+  --color-bus-300: #ffd15c;
+  --color-bus-400: #ffc21f;
+  --color-bus-500: #f5a800;
+  --color-bus-600: #d98f00;
+  --color-bus-700: #a86b00;
+
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 12px 32px -16px rgb(16 24 40 / 0.16);
+  --shadow-float: 0 18px 50px -18px rgb(16 24 40 / 0.35), 0 2px 6px rgb(16 24 40 / 0.06);
+  --shadow-glow: 0 10px 30px -10px rgb(51 102 255 / 0.55);
+
+  --radius-4xl: 2rem;
+
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-pulse-ring: pulse-ring 2.2s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+  --animate-float: float 4s ease-in-out infinite;
+  --animate-road: road 1.1s linear infinite;
+  --animate-spin-slow: spin 2.4s linear infinite;
+
+  @keyframes shimmer {
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
+  }
+  @keyframes pulse-ring {
+    0% {
+      transform: scale(0.65);
+      opacity: 0.55;
+    }
+    100% {
+      transform: scale(2.6);
+      opacity: 0;
+    }
+  }
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-6px);
+    }
+  }
+  @keyframes road {
+    from {
+      background-position: 0 0;
+    }
+    to {
+      background-position: -48px 0;
+    }
+  }
+}
+
+:root {
+  color-scheme: light;
+  -webkit-tap-highlight-color: transparent;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body {
+  background: var(--color-canvas);
+  color: var(--color-slate-900);
+}
+
+body {
+  min-height: 100dvh;
+  font-family: var(--font-sans);
+  overscroll-behavior-y: none;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 30rem at 110% -10%, rgb(51 102 255 / 0.09), transparent 60%),
+    radial-gradient(40rem 26rem at -10% 0%, rgb(255 194 31 / 0.1), transparent 60%);
+}
+
+::selection {
+  background: var(--color-brand-100);
+}
+
+button,
+[role="button"] {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-brand-500);
+  outline-offset: 2px;
+}
+
+input[type="time"]::-webkit-calendar-picker-indicator {
+  opacity: 0.5;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #eef1f6 0%, #f8fafc 40%, #eef1f6 80%);
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.safe-bottom {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+
+/* Google Maps chrome tuned to the light theme */
+.gm-style {
+  font-family: var(--font-sans) !important;
+}
+.gm-style-cc,
+.gmnoprint a,
+.gm-style a[href^="https://maps.google.com/maps"] {
+  opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

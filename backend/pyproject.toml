@@ -1,0 +1,42 @@
+[project]
+name = "itransport-backend"
+version = "0.1.0"
+description = "iTransport school bus tracking API (FastAPI on Cloud Run)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.142,<1",
+    "uvicorn[standard]>=0.54,<1",
+    "google-cloud-firestore>=2.34,<3",
+    "pydantic>=2.13,<3",
+    "pyjwt>=2.15,<3",
+    "argon2-cffi>=25.1",
+    "pywebpush>=2.5,<3",
+    "httpx>=0.28,<1",
+    "tzdata>=2025.1",
+    "google-genai>=1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-asyncio>=1.4",
+    "ruff>=0.16",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["B008"]  # FastAPI dependencies are declared as argument defaults
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*" = ["E501"]  # command-line examples in docstrings
+"tests/*" = ["E501"]

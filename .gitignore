@@ -1,0 +1,27 @@
+# Dependencies and build output
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local settings and secrets
+.env
+.env.*
+
+# Logs and OS / editor files
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Source documents kept out of the code repo (the app's icons are in frontend/public)
+/Einstein-Logo-Final-01.jpg
+/School_Bus_Transport_Management_Project_Document.pdf
