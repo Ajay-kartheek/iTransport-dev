@@ -124,7 +124,7 @@ export function AdminSettings() {
             <CardHeader
               icon={<Clock className="size-5" />}
               title="Plan cutoffs"
-              subtitle="After these times, parents can't change Riding/Absent for that trip."
+              subtitle="Students ride unless a parent marks them absent. After these times, that trip's plan is locked."
             />
             <div className="mt-4 grid grid-cols-2 gap-4 px-5">
               <Field label="Morning trip">
@@ -172,7 +172,7 @@ export function AdminSettings() {
             <CardHeader
               icon={<CalendarX2 className="size-5" />}
               title="School days & holidays"
-              subtitle="Reminders and plans only cover days with bus service."
+              subtitle="On these days every student rides unless marked absent."
             />
             <div className="mt-4 space-y-4 px-5">
               <div className="flex flex-wrap gap-2">

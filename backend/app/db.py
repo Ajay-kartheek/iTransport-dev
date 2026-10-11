@@ -15,7 +15,6 @@ TRIPS = "trips"
 POINTS = "points"  # subcollection of trips
 DECLARATIONS = "declarations"
 PUSH_SUBS = "pushSubs"
-REMINDERS = "reminders"
 AUDIT = "audit"
 SETTINGS = "settings"
 SCHOOL_SETTINGS_DOC = "school"

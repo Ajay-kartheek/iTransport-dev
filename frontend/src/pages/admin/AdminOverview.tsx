@@ -3,7 +3,6 @@ import {
   Bus,
   Check,
   ChevronDown,
-  CircleHelp,
   GraduationCap,
   MapPinned,
   Route as RouteIcon,
@@ -46,7 +45,7 @@ export function AdminOverview() {
   const buses = live.data?.buses ?? [];
   const running = buses.filter((b) => b.trip.status === "in_progress");
   const direction: Direction = picked ?? running[0]?.trip.direction ?? buses[0]?.trip.direction ?? "AM";
-  const totals = today.data?.totals[direction] ?? { riding: 0, absent: 0, none: 0 };
+  const totals = today.data?.totals[direction] ?? { riding: 0, absent: 0 };
   const campuses = useMemo(() => live.data?.school.campuses ?? [], [live.data]);
   const school = campuses[0]?.location ?? null;
   const selectedBus = buses.find((b) => b.id === selected) ?? null;
@@ -133,11 +132,16 @@ export function AdminOverview() {
         </Card>
       )}
 
-      <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <motion.div variants={stagger} initial="hidden" animate="show" className="grid grid-cols-3 gap-3">
         <Stat icon={<Bus className="size-5" />} tone="brand" label="On the road" value={running.length} suffix={`/ ${buses.length}`} />
-        <Stat icon={<Check className="size-5" />} tone="green" label="Riding" value={totals.riding} />
+        <Stat
+          icon={<Check className="size-5" />}
+          tone="green"
+          label="Riding"
+          value={totals.riding}
+          suffix={`/ ${totals.riding + totals.absent}`}
+        />
         <Stat icon={<X className="size-5" />} tone="red" label="Absent" value={totals.absent} />
-        <Stat icon={<CircleHelp className="size-5" />} tone="slate" label="No reply yet" value={totals.none} />
       </motion.div>
 
       <div className="mt-5 grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
@@ -313,9 +317,11 @@ function BusCard({
           </span>
           <span className="mt-1 block truncate text-xs text-slate-500">
             {trip.status === "in_progress"
-              ? next
-                ? `Next: ${next.name}${next.eta && !trip.stale ? ` · ${minutesUntil(next.eta, now)} min` : ""}`
-                : "All stops done"
+              ? !trip.setOffAt
+                ? "Waiting to set off"
+                : next
+                  ? `Next: ${next.name}${next.eta && !trip.stale ? ` · ${minutesUntil(next.eta, now)} min` : ""}`
+                  : "All stops done"
               : trip.status === "completed"
                 ? trip.schoolReachedAt
                   ? `Reached school ${clock(trip.schoolReachedAt)}`
@@ -336,8 +342,7 @@ function BusCard({
           {counts && (
             <span className="mt-2.5 flex flex-wrap gap-1.5">
               <Badge tone="green">{counts.riding} riding</Badge>
-              <Badge tone="red">{counts.absent} absent</Badge>
-              <Badge tone="slate">{counts.none} no reply</Badge>
+              {counts.absent > 0 && <Badge tone="red">{counts.absent} absent</Badge>}
             </span>
           )}
         </span>

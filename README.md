@@ -3,8 +3,8 @@
 Live school-bus tracking for one school (built to grow to more):
 
 - **Parents** see their child's bus moving on a map, get an honest arrival time for their stop,
-  receive alerts (trip started, bus ~10 min away, reached their child's campus, plan reminders)
-  and mark each trip **Riding** or **Absent**.
+  and receive alerts (trip started, bus ~10 min away, reached their child's campus). Children ride
+  every school day by default; parents only mark the trips they'll miss as **Absent**.
 - **Drivers** pick their bus, see who is riding at each stop, **slide to start** the trip — the phone
   then shares its location — and **slide to end** it.
 - **The transport office** manages campuses, buses, routes and stops, students, parent/driver
@@ -31,12 +31,20 @@ Live school-bus tracking for one school (built to grow to more):
 | Hosting | One Cloud Run service (serves the web app and `/api`), Secret Manager, Cloud Scheduler |
 | AI | Daily summary by Gemini (`gemini-3.1-flash-lite`) on Vertex AI — one short call per day |
 
-**Getting the location right** (`backend/app/geo.py`): fixes less accurate than 100 m, out of
-order, from the future, or implying impossible speeds are dropped; stops are reached inside a
-configurable radius (stops the bus drives past are marked "passed"); no fix for 2 minutes shows
-"Location unavailable since …" instead of a guess; ETAs come from the Routes API every ≤45 s (a
-clearly labelled estimate is used if Maps is unavailable). Location is only shared between *Start
-trip* and *End trip*, and history auto-deletes after 30 days.
+**Getting the location right** (`backend/app/geo.py`, `backend/app/progress.py`): fixes less
+accurate than 100 m, out of order, from the future, or implying impossible speeds are dropped. Stop
+progress is worked out from the bus's whole path, not one stop at a time: every time the path
+(including the stretch between two fixes) comes within the arrival radius of a stop, that stop gets
+a visit, and the longest run of visits that follows the stop order forward in time decides what was
+reached. So a stop pinned off the road, a missed stop or a signal gap never leaves a trip stuck
+(skipped stops show as "passed"), while an empty morning bus driving out past its stops to the
+first pickup doesn't count them. If a bus clearly runs the stops the other way round, the trip
+switches to the bus's order. Each route's order per trip comes from the map — mornings end at the
+end nearest the school, afternoons start there — and the office can flip it. Until the bus sets
+off, parents see "waiting" instead of an arrival time. No fix for 2 minutes shows "Location
+unavailable since …" instead of a guess; ETAs come from the Routes API every ≤45 s (a clearly
+labelled estimate is used if Maps is unavailable). Location is only shared between *Start trip*
+and *End trip*, and history auto-deletes after 30 days.
 
 ## Run it locally
 
@@ -67,6 +75,8 @@ Open http://127.0.0.1:5180 and sign in as `admin`, `ravi` (driver) or `priya` (p
 cd backend
 uv run python -m scripts.simulate_trip --driver ravi --password demo-pass-2026 --direction AM --base http://127.0.0.1:8077
 ```
+
+Add `--reverse` to drive a trip's stops the other way round; the trip switches to the bus's order.
 
 Without a Maps key the app still works: maps show a placeholder, ETAs are labelled estimates, and
 stops can be added by pasting coordinates (e.g. `13.0850, 80.2101`).
@@ -114,6 +124,9 @@ deploys with day summaries turned off.
 - **Activity and day summary** — *Activity* shows one day at a time (pick any date). The day's
   summary is written automatically at 8 PM, or on demand with *Summarize today so far*. The model
   only sees counts, times, bus and route numbers — never student or parent names.
+- **Riding by default** — every student on a bus route counts as riding on each school day.
+  Parents mark *Absent* before the trip's cutoff (and can switch back), and the driver's roster
+  and the office's counts follow.
 - **Cutoffs, alert timing, school days, holidays** — *School settings*.
 
 ## Configuration (environment variables)

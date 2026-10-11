@@ -155,6 +155,17 @@ export function DriverTrip() {
               {rejectionReason(tracker)}
             </Banner>
           )}
+          {running && tracker?.pausedMs && tracker.resumedAt && now - tracker.resumedAt < 3 * 60_000 && (
+            <Banner tone="warning" title={`Location was paused for ${Math.max(1, Math.round(tracker.pausedMs / 60_000))} min`}>
+              It stops while the phone is locked or another app is open, and parents see the bus freeze. Keep
+              iTransport open on screen until you end the trip.
+            </Banner>
+          )}
+          {running && trip.stopsFlippedAt && now - trip.stopsFlippedAt < 5 * 60_000 && (
+            <Banner tone="info" title="Stop order switched">
+              You're driving the stops the other way round, so the trip now follows your order.
+            </Banner>
+          )}
           {tracker?.ended && <Banner tone="info">The transport office ended this trip.</Banner>}
         </AnimatePresence>
 
@@ -327,11 +338,6 @@ function NextStop({ trip, counts, now }: { trip: TripView; counts: Record<string
             <span className="rounded-2xl bg-white/15 px-3.5 py-2 text-base font-extrabold">
               {tally.riding} riding
             </span>
-            {tally.none > 0 && (
-              <span className="rounded-2xl bg-white/10 px-3.5 py-2 text-base font-bold text-white/85">
-                {tally.none} no reply
-              </span>
-            )}
             {tally.absent > 0 && (
               <span className="rounded-2xl bg-white/10 px-3.5 py-2 text-base font-bold text-white/70">
                 {tally.absent} absent

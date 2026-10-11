@@ -195,6 +195,18 @@ function Headline({
     );
   }
 
+  if (!trip.setOffAt) {
+    const start = trip.direction === "PM" && trip.stops[0]?.kind === "school" ? trip.stops[0].name : null;
+    return (
+      <Status
+        icon={<Clock3 className="size-6" />}
+        tone="brand"
+        title={start ? `Bus ${trip.busNumber} is waiting at ${start}` : `Bus ${trip.busNumber} is getting ready`}
+        body="The trip has started. You'll see the arrival time as soon as the bus is on its way."
+      />
+    );
+  }
+
   if (!mine) {
     return <Status icon={<Navigation className="size-6" />} tone="brand" title={`Bus ${trip.busNumber} is on the move`} />;
   }

@@ -5,76 +5,16 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from google.api_core.exceptions import Conflict
-
-from .. import ai, push
-from ..db import REMINDERS, STUDENTS, get_db
+from .. import ai
 from ..timeutil import add_days, local_now, now_ms, today_str
 from .daily import generate_summary, get_summary
-from .school import get_school, is_service_day, reminder_at_ms, trip_cutoff_ms
-from .trips import complete_trip, declarations_for, list_docs, trips_on
+from .school import get_school, is_service_day
+from .trips import complete_trip, trips_on
 
 log = logging.getLogger("itransport.cron")
 
 ABANDONED_AFTER_MS = 6 * 60 * 60_000
 EVENING_SUMMARY_HOUR = 20
-
-
-def _when(date: str, direction: str, today: str) -> str:
-    if direction == "PM":
-        return "this afternoon" if date == today else "in the afternoon"
-    return "this morning" if date == today else "tomorrow morning"
-
-
-def _names(names: list[str]) -> str:
-    firsts = [n.split()[0] if n else "your child" for n in names]
-    return firsts[0] if len(firsts) == 1 else ", ".join(firsts[:-1]) + " and " + firsts[-1]
-
-
-async def send_due_reminders() -> dict[str, int]:
-    """Remind parents who haven't marked Riding/Absent before a trip's cutoff."""
-    school = await get_school()
-    now = now_ms()
-    today = today_str(now)
-    sent: dict[str, int] = {}
-    slots = [(today, "AM"), (today, "PM"), (add_days(today, 1), "AM")]
-    for date, direction in slots:
-        if not is_service_day(school, date):
-            continue
-        cutoff = trip_cutoff_ms(school, date, direction)
-        if not (reminder_at_ms(school, date, direction) <= now < cutoff):
-            continue
-        slot_ref = get_db().collection(REMINDERS).document(f"{date}_{direction}")
-        try:
-            await slot_ref.create({"at": now, "count": 0})  # each slot is reminded once
-        except Conflict:
-            continue
-
-        students = [
-            s for s in await list_docs(STUDENTS) if s.get("active", True) and s.get("routeId")
-        ]
-        decl = await declarations_for(date, direction, [s["id"] for s in students])
-        waiting: dict[str, list[str]] = {}
-        for student in students:
-            if student["id"] in decl:
-                continue
-            for pid in student.get("parentIds") or []:
-                waiting.setdefault(pid, []).append(student.get("name", ""))
-
-        cutoff_label = local_now(cutoff).strftime("%-I:%M %p")
-        messages: dict[str, dict[str, Any]] = {
-            pid: {
-                "title": f"Will {_names(names)} take the bus {_when(date, direction, today)}?",
-                "body": f"Tap to mark Riding or Absent before {cutoff_label}.",
-                "tag": f"remind-{date}-{direction}",
-                "url": "/",
-            }
-            for pid, names in waiting.items()
-        }
-        delivered = await push.send_each(messages, ttl=3600)
-        await slot_ref.update({"count": delivered, "parents": len(messages)})
-        sent[f"{date}_{direction}"] = delivered
-    return sent
 
 
 async def close_abandoned_trips() -> int:
@@ -113,8 +53,7 @@ async def write_evening_summary() -> bool:
 
 
 async def run_tick() -> dict[str, Any]:
-    reminders = await send_due_reminders()
     closed = await close_abandoned_trips()
     summarized = await write_evening_summary()
-    log.info("cron tick: reminders=%s closed=%s summary=%s", reminders, closed, summarized)
-    return {"reminders": reminders, "closedTrips": closed, "summaryWritten": summarized}
+    log.info("cron tick: closed=%s summary=%s", closed, summarized)
+    return {"closedTrips": closed, "summaryWritten": summarized}

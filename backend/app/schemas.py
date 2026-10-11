@@ -146,6 +146,9 @@ class RouteBody(Body):
     stops: list[StopIn] = Field(default_factory=list, max_length=60)
     # Campuses the bus visits, in morning order (afternoon trips run in reverse).
     campusIds: list[str] = Field(default_factory=list, max_length=4)
+    # Run a trip's stops against their listed order. None = decide from the map.
+    amReversed: bool | None = None
+    pmReversed: bool | None = None
 
 
 class StudentBody(Body):

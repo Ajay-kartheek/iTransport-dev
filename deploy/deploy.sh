@@ -141,7 +141,7 @@ if [[ "$URL" != "$URL_GUESS" ]]; then
     --allowed-referrers="${URL_GUESS}/*,${URL}/*,http://localhost:5180/*,http://127.0.0.1:5180/*"
 fi
 
-step "Reminder and clean-up schedule (every 15 minutes)"
+step "Clean-up and daily summary schedule (every 15 minutes)"
 g scheduler jobs delete itransport-tick --location "$REGION" >/dev/null 2>&1 || true
 g scheduler jobs create http itransport-tick \
   --location "$REGION" \

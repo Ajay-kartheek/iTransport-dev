@@ -9,7 +9,7 @@ from app.security import (
     password_problem,
     verify_password,
 )
-from app.services.school import DEFAULTS, is_service_day, reminder_at_ms, upcoming_service_days
+from app.services.school import DEFAULTS, is_service_day, upcoming_service_days
 from app.timeutil import add_days, cutoff_ms, default_direction, local_ms, today_str
 
 
@@ -29,7 +29,7 @@ def test_direction_and_cutoffs() -> None:
     assert cutoff_ms("2026-10-05", "PM", "06:30", "12:30") == local_ms("2026-10-05", "12:30")
 
 
-def test_service_days_and_reminders() -> None:
+def test_service_days() -> None:
     school = {**DEFAULTS, "serviceDays": [1, 2, 3, 4, 5], "holidays": ["2026-10-07"]}
     assert is_service_day(school, "2026-10-05")  # Monday
     assert not is_service_day(school, "2026-10-04")  # Sunday
@@ -39,7 +39,6 @@ def test_service_days_and_reminders() -> None:
         "2026-10-06",
         "2026-10-08",
     ]
-    assert reminder_at_ms(school, "2026-10-06", "AM") == local_ms("2026-10-05", "19:00")
     assert add_days("2026-12-31", 1) == "2027-01-01"
 
 

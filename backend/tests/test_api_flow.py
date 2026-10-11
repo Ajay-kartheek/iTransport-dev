@@ -148,7 +148,7 @@ async def test_full_trip_flow(api: httpx.AsyncClient) -> None:
             await driver.get(f"/api/driver/buses/{world['bus_id']}/roster?direction=AM")
         ).json()
         assert roster["trip"]["status"] == "scheduled"
-        assert roster["roster"]["totals"] == {"riding": 1, "absent": 0, "none": 0}
+        assert roster["roster"]["totals"] == {"riding": 1, "absent": 0}
         stop_row = roster["roster"]["stops"][1]
         assert stop_row["students"][0]["status"] == "riding"
         assert [s["kind"] for s in roster["roster"]["stops"]][-1] == "school"
@@ -555,18 +555,24 @@ async def test_two_campuses_day_log_and_summary(
         assert r.status_code == 200, r.text
         tid = r.json()["tripId"]
 
-        # Drive north past the pickup, the junior campus and then the main campus.
+        # Drive north past the pickup, stopping 30 s at the junior campus, then the main one.
         start = now_ms() - 55_000
-        fixes = [
-            {"lat": 13.0800 + i * 0.0005, "lng": 80.2101, "accuracy": 8, "at": start + i * 3_000}
-            for i in range(32)
-        ]
+        fixes: list[dict[str, Any]] = []
+        at, lat = start, 13.0800
+        for campus_lat in (13.0900, 13.0950):
+            while lat < campus_lat - 1e-9:
+                lat = min(campus_lat, lat + 0.0005)
+                at += 3_000
+                fixes.append({"lat": lat, "lng": 80.2101, "accuracy": 8, "at": at})
+            for _ in range(2):  # the phone records every 15 s while the bus stands still
+                at += 15_000
+                fixes.append({"lat": lat, "lng": 80.2101, "accuracy": 8, "at": at})
         for i in range(0, len(fixes), 8):
             r = await driver_app.post(
                 f"/api/driver/trips/{tid}/locations", json={"fixes": fixes[i : i + 8]}
             )
             assert r.status_code == 200, r.text
-            assert r.json()["accepted"] == len(fixes[i : i + 8])
+            assert r.json()["accepted"] == len(fixes[i : i + 8]), r.json()
 
         cache.invalidate("trip:")
         live = (
@@ -668,3 +674,146 @@ async def test_evening_summary_is_written_once_on_bus_days(
     summary = await get_summary(today)
     assert summary is not None and summary["partial"] is False
     assert len(calls) == 1
+
+
+async def test_trip_order_follows_the_map_and_ending_at_school_counts(
+    api: httpx.AsyncClient,
+) -> None:
+    await create_user(name="Office", username="office", role="ADMIN", password="Temp-1234-start")
+    await sign_in(api, "office", "Temp-1234-start", "Office-Strong-77")
+    world = await setup_school(api)  # school at 13.1150; the shared route is listed far -> near
+
+    # A second route listed the other way round: nearest the school first.
+    near_first = [
+        {"name": "Near", "lat": 13.1050, "lng": 80.2101},
+        {"name": "Middle", "lat": 13.0950, "lng": 80.2101},
+        {"name": "Far", "lat": 13.0850, "lng": 80.2101},
+    ]
+    r = await api.post("/api/admin/routes", json={"name": "Route N", "stops": near_first})
+    route_id = r.json()["id"]
+    bus_id = (
+        await api.post("/api/admin/buses", json={"number": "30", "routeId": route_id})
+    ).json()["id"]
+    await api.put(
+        f"/api/admin/users/{world['driver']['id']}",
+        json={"name": "Ravi", "mobile": "", "active": True, "busIds": []},
+    )
+
+    async with make_client() as driver:
+        await sign_in(driver, "ravi", world["driver"]["tempPassword"], "Ravi-Strong-33")
+
+        async def order(bus: str, direction: str) -> list[str]:
+            r = await driver.get(f"/api/driver/buses/{bus}/roster?direction={direction}")
+            return [s["name"] for s in r.json()["roster"]["stops"]]
+
+        # Mornings end near school, afternoons start there, however the stops were listed.
+        assert await order(bus_id, "AM") == ["Far", "Middle", "Near", "Main Campus"]
+        assert await order(bus_id, "PM") == ["Main Campus", "Near", "Middle", "Far"]
+        listed = ["Anna Nagar Tower", "Thirumangalam", "Mogappair East"]
+        assert await order(world["bus_id"], "AM") == [*listed, "Main Campus"]
+        assert await order(world["bus_id"], "PM") == ["Main Campus", *reversed(listed)]
+
+        # The office can flip a trip by hand.
+        routes = {x["id"]: x for x in (await api.get("/api/admin/routes")).json()["routes"]}
+        assert routes[route_id]["amReversed"] is None
+        r = await api.put(
+            f"/api/admin/routes/{route_id}",
+            json={
+                "name": "Route N",
+                "stops": [
+                    {k: s[k] for k in ("id", "name", "address", "lat", "lng")}
+                    for s in routes[route_id]["stops"]
+                ],
+                "campusIds": routes[route_id]["campusIds"],
+                "amReversed": False,
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert await order(bus_id, "AM") == ["Near", "Middle", "Far", "Main Campus"]
+
+        # Run the original route in the morning and end the trip the moment the bus is at
+        # school, before it has stood still there.
+        r = await driver.post(
+            "/api/driver/trips/start", json={"busId": world["bus_id"], "direction": "AM"}
+        )
+        tid = r.json()["tripId"]
+        start = now_ms() - 55_000
+        fixes = [
+            {"lat": 13.0830 + i * 0.0009, "lng": 80.2101, "accuracy": 6, "at": start + i * 4_000}
+            for i in range(36)
+        ]
+        assert fixes[-1]["lat"] == pytest.approx(13.1145)
+        for i in range(0, len(fixes), 12):
+            r = await driver.post(
+                f"/api/driver/trips/{tid}/locations", json={"fixes": fixes[i : i + 12]}
+            )
+            assert r.json()["accepted"] == len(fixes[i : i + 12]), r.json()
+        state = (await driver.get(f"/api/driver/trips/{tid}")).json()["trip"]
+        assert state["setOffAt"] is not None
+        assert [s["state"] for s in state["stops"]][:3] == ["departed"] * 3
+        assert state["stops"][-1]["state"] == "pending"  # at the gate, not stopped yet
+
+        assert (await driver.post(f"/api/driver/trips/{tid}/end")).status_code == 200
+        cache.invalidate("trip:")
+        ended = (await driver.get(f"/api/driver/trips/{tid}")).json()["trip"]
+        assert ended["schoolReachedAt"] is not None
+        assert ended["stops"][-1]["state"] == "arrived"
+
+
+async def test_students_ride_on_school_days_unless_marked_absent(api: httpx.AsyncClient) -> None:
+    await create_user(name="Office", username="office", role="ADMIN", password="Temp-1234-start")
+    await sign_in(api, "office", "Temp-1234-start", "Office-Strong-77")
+    world = await setup_school(api)
+    today = today_str()
+
+    async with make_client() as parent, make_client() as driver:
+        await sign_in(parent, "priya", world["parent"]["tempPassword"], "Priya-Strong-22")
+        await sign_in(driver, "ravi", world["driver"]["tempPassword"], "Ravi-Strong-33")
+
+        async def roster_totals() -> dict[str, int]:
+            r = await driver.get(f"/api/driver/buses/{world['bus_id']}/roster?direction=AM")
+            return r.json()["roster"]["totals"]
+
+        async def office_totals() -> dict[str, int]:
+            cache.invalidate()
+            return (await api.get("/api/admin/today")).json()["totals"]["AM"]
+
+        # Nobody has marked anything: every school day is "riding".
+        home = (await parent.get("/api/parent/home")).json()
+        plan = home["children"][0]["plan"]
+        assert len(plan) == 7
+        assert {day[d]["status"] for day in plan for d in ("AM", "PM")} == {"riding"}
+        assert await roster_totals() == {"riding": 1, "absent": 0}
+        assert await office_totals() == {"riding": 1, "absent": 0}
+        live = (await parent.get(f"/api/parent/children/{world['student_id']}/live")).json()
+        assert live["declaration"] == "riding"
+
+        # Marking absent takes the child off this morning's bus only.
+        r = await parent.put(
+            "/api/parent/declarations",
+            json={
+                "studentId": world["student_id"],
+                "date": today,
+                "direction": "AM",
+                "status": "absent",
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert await roster_totals() == {"riding": 0, "absent": 1}
+        assert await office_totals() == {"riding": 0, "absent": 1}
+        plan = (await parent.get("/api/parent/home")).json()["children"][0]["plan"]
+        today_plan = next(day for day in plan if day["date"] == today)
+        assert today_plan["AM"]["status"] == "absent" and today_plan["PM"]["status"] == "riding"
+
+        # And back again.
+        r = await parent.put(
+            "/api/parent/declarations",
+            json={
+                "studentId": world["student_id"],
+                "date": today,
+                "direction": "AM",
+                "status": "riding",
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert await roster_totals() == {"riding": 1, "absent": 0}

@@ -74,7 +74,7 @@ export function AdminLayout() {
           <NavItems />
         </div>
         <div className="rounded-3xl border border-slate-200/70 bg-white p-2 shadow-card">
-          <UserMenu />
+          <UserMenu placement="above" />
         </div>
       </aside>
 

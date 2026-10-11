@@ -15,7 +15,7 @@ from ..config import get_settings
 from ..db import AUDIT, BUSES, DECLARATIONS, POINTS, STUDENTS, TRIPS, get_db
 from ..timeutil import DIRECTIONS, add_days, local_ms, local_now, now_ms, today_str
 from .school import campuses_of, get_school, is_service_day
-from .trips import list_docs, trips_on
+from .trips import DEFAULT_PLAN, list_docs, trips_on
 
 log = logging.getLogger("itransport.daily")
 
@@ -66,6 +66,15 @@ async def _longest_gap_minutes(trip_id: str) -> int:
     return round(longest / 60_000)
 
 
+def _waited(trip: dict[str, Any]) -> int | None:
+    """Minutes between starting the trip and the bus setting off, if it was notable."""
+    started, set_off = trip.get("startedAt"), trip.get("setOffAt")
+    if not started or not set_off:
+        return None
+    minutes = round((int(set_off) - int(started)) / 60_000)
+    return minutes if minutes >= 5 else None
+
+
 def _ended_by(trip: dict[str, Any]) -> str | None:
     if trip.get("status") != "completed":
         return None
@@ -96,11 +105,10 @@ async def day_facts(day: str) -> dict[str, Any]:
         marks[(d.get("studentId"), d.get("direction"))] = d.get("status")
     plans = {}
     for direction in DIRECTIONS:
-        statuses = [marks.get((s["id"], direction), "none") for s in riders]
+        statuses = [marks.get((s["id"], direction), DEFAULT_PLAN) for s in riders]
         plans["morning" if direction == "AM" else "afternoon"] = {
             "riding": statuses.count("riding"),
             "absent": statuses.count("absent"),
-            "no_reply": statuses.count("none"),
         }
 
     trip_facts = []
@@ -133,9 +141,11 @@ async def day_facts(day: str) -> dict[str, Any]:
                 else None,
                 "stops_reached": len(reached),
                 "stops_total": len(pickups),
-                "stops_passed_without_stopping": passed,
+                "stops_never_reached": passed,
                 "campus_arrivals": campus_times,
                 "ended_by": _ended_by(t),
+                "stop_order_switched_to_match_the_bus": bool(t.get("stopsFlippedAt")),
+                "minutes_waiting_before_setting_off": _waited(t),
                 "location_updates": int(t.get("pointCount") or 0),
                 "longest_location_gap_minutes": gap if gap >= GAP_WORTH_MENTIONING_MIN else None,
                 "bus_close_alerts_sent": sum(

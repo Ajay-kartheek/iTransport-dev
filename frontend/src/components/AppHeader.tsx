@@ -1,4 +1,4 @@
-import { ChevronDown, KeyRound, LogOut } from "lucide-react";
+import { ChevronDown, ChevronUp, KeyRound, LogOut } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
@@ -27,7 +27,15 @@ export function AppHeader({ left, className }: { left?: ReactNode; className?: s
   );
 }
 
-export function UserMenu({ compact }: { compact?: boolean }) {
+/** The signed-in person's menu; `placement="above"` opens it upwards, for the foot of a sidebar. */
+export function UserMenu({
+  compact,
+  placement = "below",
+}: {
+  compact?: boolean;
+  placement?: "below" | "above";
+}) {
+  const above = placement === "above";
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -50,32 +58,44 @@ export function UserMenu({ compact }: { compact?: boolean }) {
   if (!user) return null;
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className={cn("relative", above && "w-full")}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="flex items-center gap-2 rounded-2xl p-1 pr-2 transition hover:bg-white hover:shadow-card active:scale-[0.98]"
+        className={cn(
+          "flex items-center gap-2 rounded-2xl p-1 pr-2 transition hover:bg-white hover:shadow-card active:scale-[0.98]",
+          above && "w-full hover:bg-slate-50 hover:shadow-none",
+        )}
       >
         <Avatar name={user.name} className="size-9" />
         {!compact && (
-          <span className="hidden text-left leading-tight sm:block">
-            <span className="block text-sm font-bold text-slate-800">{user.name}</span>
-            <span className="block text-xs text-slate-500">{roleNames[user.role]}</span>
+          <span className={cn("hidden text-left leading-tight sm:block", above && "min-w-0 flex-1")}>
+            <span className="block truncate text-sm font-bold text-slate-800">{user.name}</span>
+            <span className="block truncate text-xs text-slate-500">{roleNames[user.role]}</span>
           </span>
         )}
-        <ChevronDown className={cn("size-4 text-slate-400 transition-transform", open && "rotate-180")} />
+        {above ? (
+          <ChevronUp className={cn("size-4 shrink-0 text-slate-400 transition-transform", open && "rotate-180")} />
+        ) : (
+          <ChevronDown className={cn("size-4 text-slate-400 transition-transform", open && "rotate-180")} />
+        )}
       </button>
       <AnimatePresence>
         {open && (
           <motion.div
             role="menu"
-            initial={{ opacity: 0, y: -6, scale: 0.97 }}
+            initial={{ opacity: 0, y: above ? 6 : -6, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.97 }}
+            exit={{ opacity: 0, y: above ? 6 : -6, scale: 0.97 }}
             transition={{ type: "spring", stiffness: 520, damping: 34 }}
-            className="absolute right-0 top-full z-40 mt-2 w-60 origin-top-right overflow-hidden rounded-3xl border border-slate-200/70 bg-white p-1.5 shadow-float"
+            className={cn(
+              "absolute z-40 overflow-hidden rounded-3xl border border-slate-200/70 bg-white p-1.5 shadow-float",
+              above
+                ? "inset-x-0 bottom-full mb-3 origin-bottom"
+                : "right-0 top-full mt-2 w-60 origin-top-right",
+            )}
           >
             <div className="px-3 py-2.5">
               <p className="truncate text-sm font-bold text-slate-900">{user.name}</p>

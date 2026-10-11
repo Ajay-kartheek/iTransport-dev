@@ -32,6 +32,7 @@ from ..services.school import (
     student_campus_id,
 )
 from ..services.trips import (
+    DEFAULT_PLAN,
     end_trip,
     get_doc,
     list_docs,
@@ -256,6 +257,8 @@ async def list_routes(user: CurrentUser = Depends(require_admin)) -> dict[str, A
                 "id": route["id"],
                 "name": route.get("name", ""),
                 "campusIds": route_campus_ids(route, school),
+                "amReversed": route.get("amReversed"),
+                "pmReversed": route.get("pmReversed"),
                 "bus": {"id": bus["id"], "number": bus.get("number", "")} if bus else None,
                 "studentCount": len(riders),
                 "stops": [
@@ -306,6 +309,8 @@ async def create_route(
             "name": body.name,
             "stops": _stops_from(body, set()),
             "campusIds": campus_ids,
+            "amReversed": body.amReversed,
+            "pmReversed": body.pmReversed,
             "createdAt": now,
             "updatedAt": now,
         }
@@ -340,7 +345,16 @@ async def update_route(
         get_db()
         .collection(ROUTES)
         .document(route_id)
-        .update({"name": body.name, "stops": stops, "campusIds": campus_ids, "updatedAt": now_ms()})
+        .update(
+            {
+                "name": body.name,
+                "stops": stops,
+                "campusIds": campus_ids,
+                "amReversed": body.amReversed,
+                "pmReversed": body.pmReversed,
+                "updatedAt": now_ms(),
+            }
+        )
     )
     await audit.record(
         user, "route.updated", "route", route_id, {"name": body.name, "stops": len(stops)}
@@ -608,8 +622,8 @@ async def today_counts(user: CurrentUser = Depends(require_admin)) -> dict[str, 
         buses = [b for b in await list_docs(BUSES) if b.get("active", True)]
 
         def counts(group: list[dict[str, Any]], direction: str) -> dict[str, int]:
-            statuses = [marks.get((s["id"], direction), "none") for s in group]
-            return {k: statuses.count(k) for k in ("riding", "absent", "none")}
+            statuses = [marks.get((s["id"], direction), DEFAULT_PLAN) for s in group]
+            return {k: statuses.count(k) for k in ("riding", "absent")}
 
         per_bus = []
         for bus in buses:

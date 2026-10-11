@@ -86,7 +86,6 @@ export function JourneyTimeline({
                     {tally && (
                       <>
                         {tally.riding > 0 && <Badge tone="green">{tally.riding} riding</Badge>}
-                        {tally.none > 0 && <Badge tone="slate">{tally.none} no reply</Badge>}
                         {tally.absent > 0 && <Badge tone="red">{tally.absent} absent</Badge>}
                       </>
                     )}

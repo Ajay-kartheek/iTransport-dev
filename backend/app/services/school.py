@@ -11,7 +11,7 @@ from typing import Any
 
 from .. import cache
 from ..db import SCHOOL_SETTINGS_DOC, SETTINGS, get_db
-from ..timeutil import add_days, cutoff_ms, local_ms
+from ..timeutil import add_days, cutoff_ms
 
 MAX_CAMPUSES = 4
 LEGACY_CAMPUS_ID = "main"
@@ -98,13 +98,6 @@ def upcoming_service_days(school: dict[str, Any], today: str, count: int = 7) ->
 
 def trip_cutoff_ms(school: dict[str, Any], date_str: str, direction: str) -> int:
     return cutoff_ms(date_str, direction, school["amCutoff"], school["pmCutoff"])  # type: ignore[arg-type]
-
-
-def reminder_at_ms(school: dict[str, Any], date_str: str, direction: str) -> int:
-    """Morning trips are reminded the evening before; afternoon trips an hour before cutoff."""
-    if direction == "AM":
-        return local_ms(add_days(date_str, -1), "19:00")
-    return trip_cutoff_ms(school, date_str, direction) - 60 * 60_000
 
 
 def public_campus(campus: dict[str, Any]) -> dict[str, Any]:

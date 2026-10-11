@@ -24,13 +24,17 @@ from ..db import BUSES, DECLARATIONS, POINTS, ROUTES, STUDENTS, TRIPS, USERS, ge
 from ..deps import CurrentUser
 from ..errors import ApiError, conflict, forbidden, not_found
 from ..eta import compute_etas
-from ..geo import Fix, advance_progress, check_fix, current_stop_id, is_stale, pending_stops
+from ..geo import Fix, check_fix, current_stop_id, distance_to, haversine_m, is_stale, pending_stops
+from ..progress import LEFT_ORIGIN_M, changes, record_visits, resolve, visits_from_progress
 from ..timeutil import local_now, now_ms, today_str
 from .school import campuses_of, get_school, route_campus_ids, student_campus_id
 
 log = logging.getLogger("itransport.trips")
 
+# Students ride every school day unless a parent marks them absent.
+DEFAULT_PLAN = "riding"
 ETA_REFRESH_MS = 45_000
+SAME_DISTANCE_M = 300.0  # ends of a route closer to school than this apart: run as listed
 POINT_RETENTION_DAYS = 30
 MAX_FIXES_PER_REQUEST = 120
 ALERT_TIMEOUT_S = 8.0
@@ -114,13 +118,46 @@ def school_stop_id(campus_id: str) -> str:
     return f"school-{campus_id}"
 
 
+def stops_reversed(
+    route: dict[str, Any] | None, school: dict[str, Any], direction: str
+) -> tuple[bool, bool]:
+    """Whether a trip runs the route's stops against their listed order.
+
+    Returns (reversed, automatic). The office can set it per trip direction;
+    otherwise it follows the map: morning trips end at school, so they finish
+    with the end of the route nearest the campus; afternoon trips start at
+    school, so they begin there. When both ends are about as near (a loop),
+    both trips run the stops as listed.
+    """
+    chosen = (route or {}).get("amReversed" if direction == "AM" else "pmReversed")
+    if isinstance(chosen, bool):
+        return chosen, False
+    stops = (route or {}).get("stops") or []
+    campuses = {c["id"]: c for c in campuses_of(school)}
+    first_campus = next(iter(route_campus_ids(route, school)), None)
+    if len(stops) < 2 or first_campus not in campuses:
+        return False, True
+    loc = campuses[first_campus]["location"]
+    near_first = haversine_m(float(stops[0]["lat"]), float(stops[0]["lng"]), loc["lat"], loc["lng"])
+    near_last = haversine_m(
+        float(stops[-1]["lat"]), float(stops[-1]["lng"]), loc["lat"], loc["lng"]
+    )
+    if abs(near_first - near_last) < max(SAME_DISTANCE_M, 0.2 * max(near_first, near_last)):
+        return False, True
+    school_end_listed_first = near_first < near_last
+    if direction == "AM":
+        return school_end_listed_first, True
+    return not school_end_listed_first, True
+
+
 def travel_stops(
     route: dict[str, Any] | None, school: dict[str, Any], direction: str
 ) -> list[dict[str, Any]]:
     """Stops in the order the bus visits them.
 
     Morning: the pickups, then the route's campuses in order. Afternoon: the
-    campuses in reverse (collecting students), then the drop-offs in reverse.
+    campuses in reverse (collecting students), then the drop-offs. Which way
+    round the pickups run is decided by ``stops_reversed``.
     """
     stops = [
         {
@@ -146,9 +183,11 @@ def travel_stops(
         }
         for cid in route_campus_ids(route, school)
     ]
+    if stops_reversed(route, school, direction)[0]:
+        stops.reverse()
     if direction == "AM":
         return stops + campus_stops
-    return list(reversed(campus_stops)) + list(reversed(stops))
+    return list(reversed(campus_stops)) + stops
 
 
 def campus_order(stops: list[dict[str, Any]], direction: str) -> list[str]:
@@ -208,6 +247,8 @@ def trip_view(
             "etaAt": None,
             "polyline": None,
             "currentStopId": None,
+            "setOffAt": None,
+            "stopsFlippedAt": None,
             "nextStopId": stops[0]["id"] if stops else None,
             "stops": [
                 {**s, "state": "pending", "arrivedAt": None, "departedAt": None, "eta": None}
@@ -252,6 +293,8 @@ def trip_view(
         "etaAt": trip.get("etaAt") if running else None,
         "polyline": trip.get("polyline") if running else None,
         "currentStopId": current_stop_id(trip.get("stops") or [], progress) if running else None,
+        "setOffAt": trip.get("setOffAt"),
+        "stopsFlippedAt": trip.get("stopsFlippedAt"),
         "nextStopId": remaining[0]["id"] if remaining and running else None,
         "stops": stops_out,
     }
@@ -274,7 +317,7 @@ async def load_trip_view(
 async def build_roster(
     route_id: str, stops: list[dict[str, Any]], date: str, direction: str
 ) -> dict[str, Any]:
-    """Students grouped by stop (in travel order) with Riding / Absent / no-reply counts."""
+    """Students grouped by stop (in travel order) with Riding / Absent counts."""
     students = await students_on_route(route_id)
     decl = await declarations_for(date, direction, [s["id"] for s in students])
     campus_ids = campus_order(stops, direction)
@@ -287,7 +330,7 @@ async def build_roster(
             "id": student["id"],
             "name": student.get("name", ""),
             "grade": student.get("grade", ""),
-            "status": (decl.get(student["id"]) or {}).get("status", "none"),
+            "status": (decl.get(student["id"]) or {}).get("status", DEFAULT_PLAN),
         }
         by_stop.get(student.get("stopId") or "", unassigned).append(entry)
         campus_id = student_campus_id(student, campus_ids)
@@ -298,7 +341,6 @@ async def build_roster(
         return {
             "riding": sum(1 for e in entries if e["status"] == "riding"),
             "absent": sum(1 for e in entries if e["status"] == "absent"),
-            "none": sum(1 for e in entries if e["status"] == "none"),
         }
 
     stop_rows = [
@@ -395,6 +437,10 @@ async def start_trip(
             "schoolReachedAt": None,
             "stops": stops,
             "progress": progress,
+            "visits": {},
+            "setOffAt": None,
+            "leftOriginAt": None,
+            "stopsFlippedAt": None,
             "etas": {},
             "etaAt": 0,
             "etaSource": None,
@@ -424,15 +470,18 @@ async def complete_trip(tid: str, *, ended_by: str, driver_id: str | None = None
     """
     db = get_db()
     ref = db.collection(TRIPS).document(tid)
+    radius = float((await get_school()).get("arrivalRadiusM") or 120)
 
     @firestore.async_transactional
-    async def finish(transaction: firestore.AsyncTransaction) -> dict[str, Any]:
+    async def finish(
+        transaction: firestore.AsyncTransaction,
+    ) -> tuple[dict[str, Any], list[tuple[str, str]]]:
         snap = await ref.get(transaction=transaction)
         if not snap.exists:
             raise not_found("Trip")
         trip = {"id": snap.id, **(snap.to_dict() or {})}
         if trip.get("status") == "completed":
-            return trip
+            return trip, []
         if driver_id is not None and trip.get("driverId") != driver_id:
             raise forbidden("Only the driver running this trip can end it.")
         holders = [
@@ -440,7 +489,13 @@ async def complete_trip(tid: str, *, ended_by: str, driver_id: str | None = None
             db.collection(BUSES).document(trip["busId"]) if trip.get("busId") else None,
         ]
         snaps = [await h.get(transaction=transaction) if h else None for h in holders]
-        updates = {"status": "completed", "endedAt": now_ms(), "endedBy": ended_by}
+        updates = {
+            "status": "completed",
+            "endedAt": now_ms(),
+            "endedBy": ended_by,
+            **_ended_at_school(trip, radius),
+        }
+        events = changes(trip.get("progress") or {}, updates.get("progress") or {})
         transaction.update(ref, updates)
         for holder, holder_snap in zip(holders, snaps, strict=True):
             holds_this_trip = (
@@ -451,9 +506,71 @@ async def complete_trip(tid: str, *, ended_by: str, driver_id: str | None = None
             if holder and holds_this_trip:
                 transaction.update(holder, {"activeTripId": None})
         trip.update(updates)
-        return trip
+        return trip, events
 
-    return await finish(db.transaction())
+    trip, events = await finish(db.transaction())
+    if events:
+        await _with_timeout(_campus_alerts(trip, events))
+    return trip
+
+
+def _ended_at_school(trip: dict[str, Any], radius: float) -> dict[str, Any]:
+    """Ending a morning trip at a campus counts as arriving there.
+
+    Drivers often end the trip the moment they pull in, before the bus has
+    stood still long enough for the arrival to count on its own.
+    """
+    last = Fix.from_dict(trip.get("lastFix"))
+    stops = trip.get("stops") or []
+    progress = copy.deepcopy(trip.get("progress") or {})
+    picked_up = any(
+        (progress.get(s["id"]) or {}).get("arrivedAt") for s in stops if s["kind"] == "stop"
+    )
+    if trip.get("direction") != "AM" or last is None or not picked_up:
+        return {}
+    here = next(
+        (
+            i
+            for i, s in enumerate(stops)
+            if s["kind"] == "school"
+            and not (progress.get(s["id"]) or {}).get("arrivedAt")
+            and distance_to(last, s) <= radius
+        ),
+        None,
+    )
+    if here is None:
+        return {}
+    stop = stops[here]
+    visit = next(
+        (v for v in reversed((trip.get("visits") or {}).get(stop["id"]) or []) if not v.get("out")),
+        None,
+    )
+    progress[stop["id"]] = {
+        "arrivedAt": int(visit["in"]) if visit else last.at,
+        "departedAt": None,
+        "skipped": False,
+    }
+    for earlier in stops[:here]:
+        if not (progress.get(earlier["id"]) or {}).get("arrivedAt"):
+            progress[earlier["id"]] = {"arrivedAt": None, "departedAt": None, "skipped": True}
+    reached = [
+        int(progress[s["id"]]["arrivedAt"])
+        for s in stops
+        if s["kind"] == "school" and (progress.get(s["id"]) or {}).get("arrivedAt")
+    ]
+    updates: dict[str, Any] = {"progress": progress}
+    if not trip.get("schoolReachedAt"):
+        updates["schoolReachedAt"] = max(reached)
+    return updates
+
+
+def _fixed_progress(trip: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Stops settled when the trip started: an afternoon trip begins at its first campus."""
+    stops = trip.get("stops") or []
+    if trip.get("direction") != "PM" or not stops or stops[0]["kind"] != "school":
+        return {}
+    state = (trip.get("progress") or {}).get(stops[0]["id"])
+    return {stops[0]["id"]: dict(state)} if state and state.get("arrivedAt") else {}
 
 
 async def end_trip(user: CurrentUser, tid: str, *, as_admin: bool = False) -> dict[str, Any]:
@@ -495,10 +612,11 @@ async def ingest_fixes(
         prev = Fix.from_dict(trip.get("lastFix"))
         origin = Fix.from_dict(trip.get("originFix"))
         streak = int(trip.get("jumpStreak") or 0)
-        progress = copy.deepcopy(trip.get("progress") or {})
+        old_progress = trip.get("progress") or {}
+        visits = copy.deepcopy(trip.get("visits") or visits_from_progress(old_progress))
+        left_origin_at = trip.get("leftOriginAt")
         accepted: list[Fix] = []
         rejected: dict[str, int] = {}
-        events: list[tuple[str, str]] = []
         for fix in fixes:
             reason = check_fix(
                 prev, fix, now=now, started_at=int(trip["startedAt"]), jump_streak=streak
@@ -509,35 +627,60 @@ async def ingest_fixes(
                     streak += 1
                 continue
             streak = 0
-            prev = fix
+            record_visits(trip["stops"], visits, prev, fix, radius)
             origin = origin or fix
+            if left_origin_at is None and (
+                haversine_m(origin.lat, origin.lng, fix.lat, fix.lng) >= LEFT_ORIGIN_M
+            ):
+                left_origin_at = fix.at
+            prev = fix
             accepted.append(fix)
-            events.extend(advance_progress(trip["stops"], progress, fix, radius, origin=origin))
 
         updates: dict[str, Any] = {"jumpStreak": streak}
+        events: list[tuple[str, str]] = []
         if accepted and prev is not None:
+            fixed = _fixed_progress(trip)
+            outcome = resolve(trip["stops"], visits, direction=trip["direction"], fixed=fixed)
+            progress = outcome.progress
+            events = changes(old_progress, progress)
             if not trip.get("originFix") and origin is not None:
                 updates["originFix"] = origin.to_dict()
             updates |= {
                 "lastFix": prev.to_dict(),
                 "lastFixReceivedAt": now,
                 "progress": progress,
+                "visits": visits,
+                "leftOriginAt": left_origin_at,
                 "pointCount": int(trip.get("pointCount") or 0) + len(accepted),
             }
+            if outcome.flipped:
+                events.append(("flipped", ""))
+                updates |= {"stops": outcome.stops, "stopsFlippedAt": now}
+                log.info("Trip %s: the bus is running the stops in reverse; order switched", tid)
+            if not trip.get("setOffAt"):
+                # Under way once it has left where it started, or reached a stop on the way.
+                reached = [
+                    int(state["arrivedAt"])
+                    for sid, state in progress.items()
+                    if sid not in fixed and state.get("arrivedAt")
+                ]
+                moments = [m for m in [left_origin_at, *reached] if m is not None]
+                if moments:
+                    updates["setOffAt"] = min(moments)
             campus_states = [
                 progress.get(stop["id"]) or {} for stop in trip["stops"] if stop["kind"] == "school"
             ]
             every_campus_done = bool(campus_states) and all(
                 st.get("arrivedAt") or st.get("skipped") for st in campus_states
             )
-            reached = [st["arrivedAt"] for st in campus_states if st.get("arrivedAt")]
+            reached_campus = [st["arrivedAt"] for st in campus_states if st.get("arrivedAt")]
             if (
                 trip.get("direction") == "AM"
                 and every_campus_done
-                and reached
+                and reached_campus
                 and not trip.get("schoolReachedAt")
             ):
-                updates["schoolReachedAt"] = max(reached)
+                updates["schoolReachedAt"] = max(reached_campus)
             for fix in accepted:
                 transaction.set(
                     ref.collection(POINTS).document(), {**fix.to_dict(), "expireAt": expire_at}
@@ -550,7 +693,7 @@ async def ingest_fixes(
     trip, accepted, rejected, events = await apply(db.transaction())
 
     if accepted:
-        progressed = any(kind in ("arrived", "skipped") for kind, _ in events)
+        progressed = any(kind in ("arrived", "skipped", "flipped") for kind, _ in events)
         try:
             trip = await refresh_eta(trip, http, force=progressed) or trip
         except Exception:  # positions are saved; a failed ETA refresh must not lose alerts
@@ -685,31 +828,39 @@ async def _notify_trip_started(trip: dict[str, Any]) -> None:
     )
 
 
+async def _campus_alerts(trip: dict[str, Any], events: list[tuple[str, str]]) -> None:
+    """Tell each campus's families when a morning bus reaches it."""
+    if trip["direction"] != "AM":
+        return
+    bus = trip.get("busNumber", "")
+    stops = {s["id"]: s for s in trip.get("stops") or []}
+    for kind, stop_id in events:
+        stop = stops.get(stop_id)
+        if kind != "arrived" or not stop or stop["kind"] != "school":
+            continue
+        if not await _claim_alerts(trip["id"], [f"school_{stop_id}"]):
+            continue
+        parents = await _parents_to_notify(trip, campus_id=stop.get("campusId"))
+        arrived = ((trip.get("progress") or {}).get(stop_id) or {}).get("arrivedAt") or now_ms()
+        await push.send_to_users(
+            list(parents),
+            {
+                "title": f"Bus {bus} reached {stop['name']}",
+                "body": f"Arrived at {_clock(arrived)}.",
+                "tag": f"school-{trip['id']}-{stop_id}",
+                "url": "/",
+            },
+        )
+
+
 async def _handle_alerts(trip: dict[str, Any], events: list[tuple[str, str]]) -> None:
+    await _campus_alerts(trip, events)
     school = await get_school()
     now = now_ms()
     bus = trip.get("busNumber", "")
     stops = {s["id"]: s for s in trip.get("stops") or []}
-
-    if trip["direction"] == "AM":
-        for kind, stop_id in events:
-            stop = stops.get(stop_id)
-            if kind != "arrived" or not stop or stop["kind"] != "school":
-                continue
-            if not await _claim_alerts(trip["id"], [f"school_{stop_id}"]):
-                continue
-            parents = await _parents_to_notify(trip, campus_id=stop.get("campusId"))
-            arrived = ((trip.get("progress") or {}).get(stop_id) or {}).get("arrivedAt") or now
-            await push.send_to_users(
-                list(parents),
-                {
-                    "title": f"Bus {bus} reached {stop['name']}",
-                    "body": f"Arrived at {_clock(arrived)}.",
-                    "tag": f"school-{trip['id']}-{stop_id}",
-                    "url": "/",
-                },
-            )
-
+    if not trip.get("setOffAt"):
+        return  # still waiting where it started: an arrival time now would mislead parents
     window = int(school.get("approachMinutes") or 10) * 60_000
     etas = trip.get("etas") or {}
     due = [

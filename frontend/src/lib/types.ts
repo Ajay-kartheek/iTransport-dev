@@ -2,7 +2,7 @@ export type Role = "ADMIN" | "DRIVER" | "PARENT";
 export type Direction = "AM" | "PM";
 export type TripStatus = "scheduled" | "in_progress" | "completed";
 export type Mark = "riding" | "absent";
-export type RosterStatus = Mark | "none";
+export type RosterStatus = Mark;
 export type StopState = "pending" | "arrived" | "departed" | "skipped";
 
 export interface Me {
@@ -71,13 +71,18 @@ export interface TripView {
   polyline: string | null;
   currentStopId: string | null;
   nextStopId: string | null;
+  /** When the bus left where it started (null while it's still waiting there). */
+  setOffAt: number | null;
+  /** When the stop order was switched to match how the bus is actually driving. */
+  stopsFlippedAt: number | null;
   stops: TripStop[];
 }
 
 // ---- parent
 
 export interface PlanSlot {
-  status: Mark | null;
+  /** Riding unless a parent marked the child absent. */
+  status: Mark;
   cutoffAt: number;
   locked: boolean;
 }
@@ -159,7 +164,6 @@ export interface RosterStudent {
 export interface Counts {
   riding: number;
   absent: number;
-  none: number;
 }
 
 export interface RosterStop {
@@ -233,6 +237,9 @@ export interface AdminRoute {
   name: string;
   /** Campuses the bus visits, in morning order. */
   campusIds: string[];
+  /** Run a trip's stops against their listed order; null = worked out from the map. */
+  amReversed: boolean | null;
+  pmReversed: boolean | null;
   bus: { id: string; number: string } | null;
   studentCount: number;
   stops: RouteStop[];

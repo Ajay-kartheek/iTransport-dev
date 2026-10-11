@@ -152,7 +152,9 @@ function useTripToasts(live: ParentLive | undefined, approachMinutes: number) {
     lastStatus.current = { id: trip.id, status: trip.status };
 
     const mine = trip.stops.find((s) => s.id === live.myStopId);
-    if (trip.status !== "in_progress" || trip.stale || !mine?.eta || mine.state !== "pending") return;
+    if (trip.status !== "in_progress" || trip.stale || !trip.setOffAt || !mine?.eta || mine.state !== "pending") {
+      return;
+    }
     const minutes = minutesUntil(mine.eta, serverNow());
     const key = `${trip.id}:near`;
     if (minutes <= approachMinutes && !announced.current.has(key)) {

@@ -1,5 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRightLeft, Crosshair, GripVertical, MapPin, Save, School, Trash2, Users } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRightLeft,
+  Crosshair,
+  GripVertical,
+  MapPin,
+  Moon,
+  Save,
+  School,
+  Sun,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls } from "motion/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
@@ -15,7 +27,8 @@ import { Sheet } from "../../components/ui/Sheet";
 import { useToast } from "../../components/ui/Toast";
 import { api, errorMessage } from "../../lib/api";
 import { cn } from "../../lib/hooks";
-import type { AdminRoute, Campus, LatLng, SchoolSettings } from "../../lib/types";
+import { tripReversed } from "../../lib/tripOrder";
+import type { AdminRoute, Campus, Direction, LatLng, SchoolSettings } from "../../lib/types";
 
 interface DraftStop extends LatLng {
   key: string;
@@ -49,6 +62,8 @@ export function RouteEditor() {
   const [stops, setStops] = useState<DraftStop[]>([]);
   // Campuses the bus visits in morning order; null until changed (route's own, or the first campus).
   const [chosenCampusIds, setCampusIds] = useState<string[] | null>(null);
+  // Which way round each trip runs the stops; null = worked out from the map.
+  const [reversedBy, setReversedBy] = useState<Record<Direction, boolean | null>>({ AM: null, PM: null });
   const [selected, setSelected] = useState<string | null>(null);
   const [moving, setMoving] = useState<string | null>(null);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
@@ -60,10 +75,12 @@ export function RouteEditor() {
       setName("");
       setStops([]);
       setCampusIds(null);
+      setReversedBy({ AM: null, PM: null });
       setLoadedFor("new");
     } else if (existing && loadedFor !== existing.id) {
       setName(existing.name);
       setCampusIds(null);
+      setReversedBy({ AM: existing.amReversed ?? null, PM: existing.pmReversed ?? null });
       setStops(
         existing.stops.map((s) => ({
           key: s.id,
@@ -95,8 +112,9 @@ export function RouteEditor() {
               name: existing.name,
               stops: existing.stops.map((s) => [s.id, s.name, s.address, s.lat, s.lng]),
               campusIds: existing.campusIds,
+              reversed: [existing.amReversed ?? null, existing.pmReversed ?? null],
             }
-          : { name: "", stops: [], campusIds: savedCampusIds },
+          : { name: "", stops: [], campusIds: savedCampusIds, reversed: [null, null] },
       ),
     // savedCampusIds only matters for a new route, before anything is typed.
     [existing, settings.data],
@@ -105,6 +123,7 @@ export function RouteEditor() {
     name,
     stops: stops.map((s) => [s.id, s.name, s.address, s.lat, s.lng]),
     campusIds,
+    reversed: [reversedBy.AM, reversedBy.PM],
   });
   const dirty = current !== original;
 
@@ -118,6 +137,8 @@ export function RouteEditor() {
       const body = {
         name: name.trim(),
         campusIds,
+        amReversed: reversedBy.AM,
+        pmReversed: reversedBy.PM,
         stops: stops.map((s) => ({ id: s.id, name: s.name.trim(), address: s.address.trim(), lat: s.lat, lng: s.lng })),
       };
       if (isNew) return (await api.post<{ id: string }>("/api/admin/routes", body)).id;
@@ -201,7 +222,7 @@ export function RouteEditor() {
             {isNew ? "New route" : name || "Route"}
           </h1>
           <p className="text-sm text-slate-500">
-            Search or click the map to add stops. Drag to reorder — morning pickups follow this order.
+            Search or click the map to add stops, and drag them into order along the road.
           </p>
         </div>
         <AnimatePresence>
@@ -289,6 +310,15 @@ export function RouteEditor() {
               )}
             </Card>
 
+            {stops.length > 1 && (
+              <TripOrderCard
+                stops={stops}
+                campuses={campuses}
+                reversedBy={reversedBy}
+                onChange={(direction, value) => setReversedBy((r) => ({ ...r, [direction]: value }))}
+              />
+            )}
+
             {!isNew && (
               <Card className="flex items-center justify-between gap-3 p-5">
                 <div>
@@ -368,6 +398,85 @@ export function RouteEditor() {
         <p className="text-sm text-slate-600">“{name}” and its {stops.length} stops will be removed.</p>
       </Sheet>
     </div>
+  );
+}
+
+/** The order each trip runs the stops in, worked out from the map unless the office flips it. */
+function TripOrderCard({
+  stops,
+  campuses,
+  reversedBy,
+  onChange,
+}: {
+  stops: DraftStop[];
+  campuses: Campus[];
+  reversedBy: Record<Direction, boolean | null>;
+  onChange: (direction: Direction, value: boolean | null) => void;
+}) {
+  const school = campuses[0]?.location ?? null;
+  const ends = (reversed: boolean) => {
+    const first = reversed ? stops[stops.length - 1] : stops[0];
+    const last = reversed ? stops[0] : stops[stops.length - 1];
+    return stops.length > 2 ? [first.name, "…", last.name] : [first.name, last.name];
+  };
+  const rows = (["AM", "PM"] as const).map((direction) => {
+    const { reversed, automatic } = tripReversed(stops, school, direction, reversedBy[direction]);
+    const campusNames = campuses.map((c) => c.name);
+    const path =
+      direction === "AM" ? [...ends(reversed), ...campusNames] : [...[...campusNames].reverse(), ...ends(reversed)];
+    return { direction, reversed, automatic, path };
+  });
+  return (
+    <Card className="p-5">
+      <p className="text-sm font-bold text-slate-800">Trip order</p>
+      <div className="mt-3 space-y-2.5">
+        {rows.map(({ direction, reversed, automatic, path }) => (
+          <div key={direction} className="flex items-center gap-3 rounded-2xl bg-slate-50 p-3 ring-1 ring-slate-200/70">
+            <span
+              className={cn(
+                "flex size-8 shrink-0 items-center justify-center rounded-xl",
+                direction === "AM" ? "bg-bus-100 text-bus-700" : "bg-brand-50 text-brand-600",
+              )}
+            >
+              {direction === "AM" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-slate-500">
+                {direction === "AM" ? "Morning pickup" : "Afternoon drop"}
+                <span className="font-semibold text-slate-400">
+                  {" · "}
+                  {automatic ? (
+                    "automatic"
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onChange(direction, null)}
+                      className="font-bold text-brand-700 hover:underline"
+                    >
+                      set by you · use automatic
+                    </button>
+                  )}
+                </span>
+              </p>
+              <p className="mt-0.5 text-sm font-semibold leading-snug text-slate-800">{path.join(" → ")}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onChange(direction, !reversed)}
+              className="flex size-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition hover:bg-white hover:text-brand-700"
+              aria-label={`Flip the ${direction === "AM" ? "morning" : "afternoon"} order`}
+              title="Flip the order"
+            >
+              <ArrowRightLeft className="size-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-slate-500">
+        Worked out from where the school is: mornings end near it, afternoons start there. Flip a trip if the
+        bus runs it the other way.
+      </p>
+    </Card>
   );
 }
 

@@ -39,9 +39,12 @@ Rules:
 - headline: one short, concrete sentence (under 15 words) leading with what mattered most.
   Don't repeat the school's name.
 - highlights: 2-5 short sentences covering the trips run (and when buses reached each campus),
-  how many students were riding, absent or hadn't replied, and any office changes.
-- attention: concrete follow-ups only - trips ended by the office or auto-closed, stops passed
-  without stopping, long gaps in location updates, buses that didn't run on a school day.
+  how many students were riding or marked absent (students ride unless a parent marks them
+  absent), and any office changes.
+- attention: concrete follow-ups only - trips ended by the office or auto-closed, stops the bus
+  never came near (their map pin may be off the road), long gaps in location updates, buses
+  that didn't run on a school day, trips whose stop order was switched to match the bus (the
+  route's order may need checking).
   Return an empty list when there is nothing to follow up.
 - If is_today is true the day isn't over: say "so far".
 - If it wasn't a school day and nothing happened, say so briefly.

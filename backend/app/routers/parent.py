@@ -24,6 +24,7 @@ from ..services.school import (
     upcoming_service_days,
 )
 from ..services.trips import (
+    DEFAULT_PLAN,
     bus_for_route,
     campus_order,
     declaration_id,
@@ -118,7 +119,7 @@ async def home(user: CurrentUser = Depends(require_parent)) -> dict[str, Any]:
                     "completed",
                 )
                 slots[direction] = {
-                    "status": marks.get(f"{d}_{direction}"),
+                    "status": marks.get(f"{d}_{direction}", DEFAULT_PLAN),
                     "cutoffAt": cutoff,
                     "locked": now >= cutoff or started,
                 }
@@ -202,7 +203,7 @@ async def live(
         "trip": view,
         "myStopId": child.get("stopId"),
         "myCampusStopId": school_stop_id(my_campus) if my_campus else None,
-        "declaration": (mark or {}).get("status"),
+        "declaration": (mark or {}).get("status", DEFAULT_PLAN),
         "now": now,
     }
 

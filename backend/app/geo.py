@@ -1,4 +1,6 @@
-"""Location quality filters, stop progress (geofencing) and fallback ETAs.
+"""Location quality filters, distances, stop states and fallback ETAs.
+
+Stop progress itself (which stops were reached or passed) lives in progress.py.
 
 Everything here is pure and synchronous so it can be unit tested directly.
 """
@@ -15,16 +17,12 @@ MAX_ACCURACY_M = 100.0  # fixes less precise than this are dropped
 MAX_SPEED_MPS = 33.4  # 120 km/h; faster implied movement between fixes is a GPS jump
 MAX_FUTURE_MS = 120_000  # tolerate small device clock skew
 JUMP_STREAK_LIMIT = 3  # after this many consecutive "jumps", trust the new position
-DEPART_HYSTERESIS_M = 40.0
-ARRIVAL_WINDOW = 3  # the next stop and the two after it
-CONFIRM_DWELL_MS = 20_000  # a stop reached out of order must be confirmed by staying near it
-MOVED_FROM_START_M = 400.0  # until then, only the next stop can be reached
 STALE_AFTER_MS = 120_000  # no good fix for 2 minutes -> location is "unavailable"
 
 # Fallback ETA model, used only when the Routes API is unavailable.
 FALLBACK_SPEED_MPS = 22 / 3.6
 FALLBACK_DETOUR = 1.35
-DWELL_MS = 45_000
+DWELL_MS = 30_000  # time allowed at each stop on the way
 
 
 @dataclass(frozen=True)
@@ -96,87 +94,6 @@ def check_fix(
     if moved / seconds > MAX_SPEED_MPS and jump_streak + 1 < JUMP_STREAK_LIMIT:
         return "jump"
     return None
-
-
-def _resolved(state: dict[str, Any] | None) -> bool:
-    return bool(state and (state.get("arrivedAt") or state.get("skipped")))
-
-
-def advance_progress(
-    stops: list[dict[str, Any]],
-    progress: dict[str, dict[str, Any]],
-    fix: Fix,
-    radius_m: float,
-    *,
-    origin: Fix | None,
-) -> list[tuple[str, str]]:
-    """Update stop progress for one accepted fix (mutates ``progress``).
-
-    Returns events in order: ("departed" | "skipped" | "arrived", stop_id).
-
-    Only the next stop and the two after it can be reached. The next stop counts
-    as soon as the bus is inside its radius; a stop further ahead must also be
-    confirmed by staying near it for a while, and only once the bus has left
-    where the trip started (buses often start parked next to some other stop).
-    Reaching a stop marks the pending stops before it as passed ("skipped").
-    A campus that comes after the pickups (morning trips) only counts once a
-    pickup has happened, so a bus that starts the morning parked at school
-    doesn't "arrive" at once. Campuses before the drop-offs (afternoon trips,
-    which may collect from two campuses) count normally.
-    """
-    events: list[tuple[str, str]] = []
-
-    for stop in stops:
-        state = progress.get(stop["id"])
-        if (
-            state
-            and state.get("arrivedAt")
-            and not state.get("departedAt")
-            and distance_to(fix, stop) > radius_m + DEPART_HYSTERESIS_M
-        ):
-            state["departedAt"] = fix.at
-            events.append(("departed", stop["id"]))
-
-    pending = [i for i, stop in enumerate(stops) if not _resolved(progress.get(stop["id"]))]
-    first_pickup = next((i for i, stop in enumerate(stops) if stop["kind"] == "stop"), None)
-    picked_up = any(
-        (progress.get(stop["id"]) or {}).get("arrivedAt")
-        for stop in stops
-        if stop["kind"] == "stop"
-    )
-    left_start = (
-        picked_up
-        or origin is None
-        or haversine_m(origin.lat, origin.lng, fix.lat, fix.lng) > MOVED_FROM_START_M
-    )
-
-    for rank, index in enumerate(pending[:ARRIVAL_WINDOW]):
-        stop = stops[index]
-        state = progress.setdefault(stop["id"], {})
-        if distance_to(fix, stop) > radius_m:
-            state.pop("nearSince", None)
-            continue
-        after_pickups = first_pickup is not None and index > first_pickup
-        if stop["kind"] == "school" and after_pickups and not picked_up:
-            continue
-        arrived_at = fix.at
-        if rank > 0:
-            if not left_start:
-                continue
-            since = state.setdefault("nearSince", fix.at)
-            if fix.at - since < CONFIRM_DWELL_MS:
-                continue
-            arrived_at = since
-        for prior in pending[:rank]:
-            prior_state = progress.setdefault(stops[prior]["id"], {})
-            prior_state.pop("nearSince", None)
-            prior_state["skipped"] = True
-            events.append(("skipped", stops[prior]["id"]))
-        progress[stop["id"]] = {"arrivedAt": arrived_at, "departedAt": None, "skipped": False}
-        events.append(("arrived", stop["id"]))
-        break
-
-    return events
 
 
 def pending_stops(

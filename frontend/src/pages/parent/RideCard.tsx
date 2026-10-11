@@ -74,8 +74,8 @@ export function RideCard({ child, home, now }: { child: ParentChild; home: Paren
   return (
     <Card>
       <CardHeader
-        title={`Will ${name} take the bus?`}
-        subtitle="Let the driver know before each trip's cutoff."
+        title={`${name} rides on school days`}
+        subtitle="Mark Absent before the cutoff if they won't take the bus."
       />
       <div className="scrollbar-none -mb-1 mt-4 flex gap-2 overflow-x-auto px-5 pb-1">
         {home.days.map((d) => {
@@ -139,14 +139,7 @@ export function RideCard({ child, home, now }: { child: ParentChild; home: Paren
 }
 
 function Dot({ slot, active }: { slot?: PlanSlot; active: boolean }) {
-  const color =
-    slot?.status === "riding"
-      ? "bg-emerald-400"
-      : slot?.status === "absent"
-        ? "bg-rose-400"
-        : active
-          ? "bg-white/40"
-          : "bg-slate-200";
+  const color = slot?.status === "absent" ? "bg-rose-400" : active ? "bg-emerald-300" : "bg-emerald-400";
   return <span className={cn("size-1.5 rounded-full transition-colors", color)} />;
 }
 
@@ -191,9 +184,6 @@ function SlotRow({
             {note}
           </p>
         </div>
-        {!slot.status && !slot.locked && (
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">Not marked</span>
-        )}
       </div>
       <Segmented
         label={`${direction === "AM" ? "Morning" : "Afternoon"} plan`}

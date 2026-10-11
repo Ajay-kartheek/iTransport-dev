@@ -8,7 +8,9 @@ import { distanceM } from "./maps";
  *
  * Positions are queued in localStorage and sent in batches, so short signal
  * drops lose nothing. The screen is kept awake with the Wake Lock API, since
- * browsers pause geolocation when the screen locks.
+ * browsers pause geolocation when the screen locks. Phones (iPhones especially)
+ * report rarely while standing still, so a quiet watch is topped up with a
+ * fresh reading; otherwise parents would see a parked bus as "location paused".
  */
 
 export type GpsState = "starting" | "good" | "weak" | "denied" | "unavailable";
@@ -32,6 +34,9 @@ export interface TrackerSnapshot {
   wake: WakeState;
   ended: boolean;
   lastResult: IngestResult | null;
+  /** How long sharing was paused while the page was hidden, and when it came back. */
+  pausedMs: number | null;
+  resumedAt: number | null;
 }
 
 interface QueuedFix {
@@ -51,6 +56,7 @@ const GOOD_ACCURACY_M = 40;
 const FLUSH_EVERY_MS = 5_000;
 const BATCH = 60;
 const MAX_QUEUE = 1_500;
+const NOTICE_PAUSE_MS = 45_000; // hidden this long = parents saw the bus freeze
 
 const storageKey = (tripId: string) => `itransport.queue.${tripId}`;
 
@@ -67,9 +73,11 @@ class TripTracker {
   private queue: QueuedFix[];
   private watchId: number | null = null;
   private timer: number | null = null;
+  private poller: number | null = null;
   private lock: WakeLockSentinel | null = null;
   private sending = false;
   private lastRecorded: QueuedFix | null = null;
+  private hiddenAt: number | null = null;
   private stopped = false;
   snapshot: TrackerSnapshot;
 
@@ -88,6 +96,8 @@ class TripTracker {
       wake: "wakeLock" in navigator ? "off" : "unsupported",
       ended: false,
       lastResult: null,
+      pausedMs: null,
+      resumedAt: null,
     };
   }
 
@@ -105,6 +115,7 @@ class TripTracker {
     document.addEventListener("visibilitychange", this.onVisibility);
     window.addEventListener("online", this.onOnline);
     this.timer = window.setInterval(() => void this.flush(), FLUSH_EVERY_MS);
+    this.poller = window.setInterval(this.topUp, RECORD_EVERY_MS);
     void this.flush();
   }
 
@@ -112,6 +123,7 @@ class TripTracker {
     this.stopped = true;
     if (this.watchId !== null) navigator.geolocation.clearWatch(this.watchId);
     if (this.timer !== null) window.clearInterval(this.timer);
+    if (this.poller !== null) window.clearInterval(this.poller);
     document.removeEventListener("visibilitychange", this.onVisibility);
     window.removeEventListener("online", this.onOnline);
     void this.lock?.release().catch(() => undefined);
@@ -175,16 +187,35 @@ class TripTracker {
     if (!last || this.queue.length >= 3) void this.flush();
   };
 
+  /** Ask for a fresh reading when the watch has gone quiet (a phone standing still). */
+  private topUp = (): void => {
+    if (this.stopped || document.visibilityState !== "visible") return;
+    const last = this.snapshot.lastFixAt;
+    if (last !== null && Date.now() - last < RECORD_EVERY_MS - 1_000) return;
+    navigator.geolocation.getCurrentPosition(this.onPosition, this.onError, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 10_000,
+    });
+  };
+
   private onError = (error: GeolocationPositionError): void => {
     if (error.code === error.PERMISSION_DENIED) this.update({ gps: "denied" });
     else if (this.snapshot.gps === "starting") this.update({ gps: "weak" });
   };
 
   private onVisibility = (): void => {
-    if (document.visibilityState === "visible") {
-      void this.requestWakeLock();
-      void this.flush();
+    if (document.visibilityState === "hidden") {
+      this.hiddenAt = Date.now();
+      return;
     }
+    // Browsers stop sharing location while the page is hidden (screen locked, other app open).
+    if (this.hiddenAt !== null && Date.now() - this.hiddenAt >= NOTICE_PAUSE_MS) {
+      this.update({ pausedMs: Date.now() - this.hiddenAt, resumedAt: Date.now() });
+    }
+    this.hiddenAt = null;
+    void this.requestWakeLock();
+    void this.flush();
   };
 
   private onOnline = (): void => void this.flush();

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Check, CircleHelp, MapPin, RefreshCw, School, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, MapPin, RefreshCw, School, X } from "lucide-react";
 import { motion } from "motion/react";
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
@@ -96,10 +96,9 @@ export function DriverRoster() {
           </div>
         ) : data ? (
           <>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <Tally label="Riding" value={data.roster.totals.riding} tone="green" />
               <Tally label="Absent" value={data.roster.totals.absent} tone="red" />
-              <Tally label="No reply" value={data.roster.totals.none} tone="slate" />
             </div>
 
             {data.roster.unassigned.length > 0 && (
@@ -154,11 +153,10 @@ export function DriverRoster() {
   );
 }
 
-function Tally({ label, value, tone }: { label: string; value: number; tone: "green" | "red" | "slate" }) {
+function Tally({ label, value, tone }: { label: string; value: number; tone: "green" | "red" }) {
   const styles = {
     green: "bg-emerald-50 text-emerald-700 ring-emerald-100",
     red: "bg-rose-50 text-rose-700 ring-rose-100",
-    slate: "bg-white text-slate-700 ring-slate-200/70",
   }[tone];
   return (
     <div className={cn("rounded-3xl p-4 text-center ring-1", styles)}>
@@ -171,7 +169,6 @@ function Tally({ label, value, tone }: { label: string; value: number; tone: "gr
 const statusStyle: Record<RosterStatus, { label: string; icon: typeof Check; className: string }> = {
   riding: { label: "Riding", icon: Check, className: "bg-emerald-50 text-emerald-700 ring-emerald-100" },
   absent: { label: "Absent", icon: X, className: "bg-rose-50 text-rose-600 ring-rose-100" },
-  none: { label: "No reply", icon: CircleHelp, className: "bg-slate-100 text-slate-500 ring-slate-200/70" },
 };
 
 function StopCard({
@@ -194,13 +191,13 @@ function StopCard({
         {showCampusCounts && (
           <span className="flex shrink-0 flex-wrap justify-end gap-1.5">
             <Badge tone="green">{stop.counts.riding} riding</Badge>
-            {stop.counts.none > 0 && <Badge tone="slate">{stop.counts.none} no reply</Badge>}
+            {stop.counts.absent > 0 && <Badge tone="red">{stop.counts.absent} absent</Badge>}
           </span>
         )}
       </div>
     );
   }
-  const waiting = stop.counts.riding + stop.counts.none;
+  const waiting = stop.counts.riding;
   return (
     <Card className="overflow-hidden">
       <div className="flex items-center gap-3 px-4 pt-4">

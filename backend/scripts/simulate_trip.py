@@ -100,6 +100,11 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=2.0, help="seconds between fixes")
     parser.add_argument("--dwell", type=float, default=6.0, help="seconds to wait at each stop")
     parser.add_argument("--no-end", action="store_true", help="leave the trip running at the end")
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        help="drive the trip's stops the other way round (the trip should switch to match)",
+    )
     args = parser.parse_args()
 
     base = args.base.rstrip("/")
@@ -126,6 +131,10 @@ def main() -> None:
     stops = state["trip"]["stops"]
     print(f"Started trip {trip_id} on Bus {bus['number']} with {len(stops)} stops.")
 
+    if args.reverse:
+        order = iter(list(reversed([s for s in stops if s["kind"] == "stop"])))
+        stops = [next(order) if s["kind"] == "stop" else s for s in stops]
+        print("Driving the stops in reverse: " + " -> ".join(s["name"] for s in stops))
     path = road_path(stops, os.environ.get("MAPS_SERVER_KEY"))
     step = max(5.0, args.speed * args.interval)
     position = path[0]
